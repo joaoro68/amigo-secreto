@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amigo Secreto Estância Irmãos RM</title>
+<style>
+  :root { --bg:#f1f8f2; --card:#fff; --text:#1f2d22; --muted:#6b7f70; --accent:#2e7d32; --accent-d:#1b5e20; --border:#d3e6d6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#121c14; --card:#1b2a1e; --text:#e8f3ea; --muted:#9db5a2; --accent:#4caf50; --accent-d:#388e3c; --border:#2f4733; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:520px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { text-align:center; margin:8px 0 4px; }
+  .sub { text-align:center; color:var(--muted); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px; margin-bottom:16px; }
+  .row { display:flex; gap:8px; }
+  input[type=text] { flex:1; min-width:0; padding:12px; font-size:1rem; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--text); }
+  button { font-size:1rem; padding:12px 16px; border:0; border-radius:10px; background:var(--accent); color:#fff; cursor:pointer; }
+  button:hover { background:var(--accent-d); }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.small { padding:6px 10px; font-size:.9rem; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  ul { list-style:none; margin:12px 0 0; padding:0; }
+  li { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 0; border-bottom:1px solid var(--border); }
+  li:last-child { border-bottom:0; }
+  .msg { color:var(--accent); min-height:1.2em; margin:8px 0 0; font-size:.95rem; }
+  .full { width:100%; margin-top:14px; }
+  .hidden { display:none; }
+  .reveal { text-align:center; }
+  .reveal .name { font-size:2rem; font-weight:700; color:var(--accent); margin:12px 0; word-break:break-word; }
+  .hint { color:var(--muted); font-size:.9rem; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎁 Amigo Secreto</h1>
+  <p class="sub"><strong>Estância Irmãos RM</strong><br>Sorteio em que ninguém tira a si mesmo.</p>
+
+  <!-- Tela de revelação (link individual) -->
+  <section id="viewReveal" class="card reveal hidden">
+    <p>Olá, <strong id="giverName"></strong>! Seu amigo secreto é:</p>
+    <div id="receiverBox">
+      <button id="btnShow" class="full">Clique para revelar</button>
+    </div>
+    <p class="hint">Não mostre para ninguém 🤫</p>
+  </section>
+
+  <!-- Tela de cadastro / sorteio -->
+  <div id="viewSetup">
+    <section id="savedCard" class="card hidden">
+      <strong>Sorteios salvos</strong>
+      <ul id="saved"></ul>
+    </section>
+
+    <section class="card">
+      <input type="text" id="titleInput" placeholder="Nome do sorteio (ex.: Natal 2026)" autocomplete="off" maxlength="60" style="width:100%;margin-bottom:12px">
+      <form id="addForm" class="row">
+        <input type="text" id="nameInput" placeholder="Nome do participante" autocomplete="off" maxlength="40">
+        <button type="submit">Adicionar</button>
+      </form>
+      <p id="msg" class="msg"></p>
+      <ul id="list"></ul>
+      <button id="btnDraw" class="full" disabled>Sortear</button>
+    </section>
+
+    <section id="results" class="card hidden">
+      <strong id="resTitle">Links individuais</strong>
+      <p id="fileWarn" class="msg hidden">Atenção: você abriu o site como arquivo local (file://). Os links gerados só funcionam neste computador. Publique no GitHub Pages e gere o sorteio pelo endereço https://...github.io para que todos consigam abrir.</p>
+      <p class="hint">Envie a cada pessoa o link dela. Cada link revela somente o amigo secreto daquela pessoa. Você, como organizador, não precisa abrir nenhum.</p>
+      <ul id="links"></ul>
+      <button id="btnRedo" class="ghost full">Sortear novamente</button>
+      <button id="btnNew" class="full">Novo sorteio</button>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let names = [];
+
+  // --- Sorteio: embaralha e cada um tira o próximo da fila circular.
+  // Garante que ninguém tira a si mesmo (mínimo 2 pessoas).
+  function draw(list) {
+    const a = list.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a.map((giver, i) => ({ giver, receiver: a[(i + 1) % a.length] }));
+  }
+
+  // --- Codificação do par no link (UTF-8 -> base64 url-safe)
+  const enc = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const dec = s => {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(s + '='.repeat((4 - s.length % 4) % 4));
+    return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  };
+  const linkFor = p => {
+    const base = location.href.split('#')[0].split('?')[0];
+    // Se estiver aberto como arquivo local, o link só funcionaria neste computador.
+    return `${base}#${enc(p.giver + '\n' + p.receiver)}`;
+  };
+
+  function render() {
+    const ul = $('list');
+    ul.innerHTML = '';
+    names.forEach((n, i) => {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = n;
+      const b = document.createElement('button');
+      b.className = 'ghost small';
+      b.textContent = 'Remover';
+      b.onclick = () => { names.splice(i, 1); $('results').classList.add('hidden'); render(); };
+      li.append(span, b);
+      ul.appendChild(li);
+    });
+    $('btnDraw').disabled = names.length < 3;
+    $('msg').textContent = names.length < 3 ? 'Adicione pelo menos 3 participantes.' : '';
+  }
+
+  $('addForm').onsubmit = e => {
+    e.preventDefault();
+    const n = $('nameInput').value.trim().replace(/\s+/g, ' ');
+    if (!n) return;
+    if (names.some(x => x.toLowerCase() === n.toLowerCase())) {
+      $('msg').textContent = 'Esse nome já foi adicionado.';
+      return;
+    }
+    names.push(n);
+    $('nameInput').value = '';
+    $('results').classList.add('hidden');
+    render();
+    $('nameInput').focus();
+  };
+
+  // --- Sorteios salvos (localStorage deste navegador)
+  const KEY = 'amigoSecretoSorteios';
+  let currentId = null;
+  const loadAll = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
+  const saveAll = arr => { try { localStorage.setItem(KEY, JSON.stringify(arr)); } catch {} };
+
+  function saveCurrent(pairs) {
+    const all = loadAll();
+    const title = $('titleInput').value.trim() || 'Sorteio sem nome';
+    let entry = all.find(e => e.id === currentId);
+    if (!entry) {
+      entry = { id: Date.now().toString(36), date: new Date().toISOString() };
+      all.unshift(entry);
+      currentId = entry.id;
+    }
+    entry.title = title;
+    entry.pairs = pairs;
+    saveAll(all);
+    renderSaved();
+  }
+
+  function renderSaved() {
+    const all = loadAll();
+    $('savedCard').classList.toggle('hidden', !all.length);
+    const ul = $('saved');
+    ul.innerHTML = '';
+    all.forEach(e => {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = `${e.title} · ${new Date(e.date).toLocaleDateString('pt-BR')} · ${e.pairs.length} pessoas`;
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const open = document.createElement('button');
+      open.className = 'small'; open.textContent = 'Abrir';
+      open.onclick = () => {
+        currentId = e.id;
+        names = e.pairs.map(p => p.giver);
+        $('titleInput').value = e.title;
+        render();
+        showResults(e.pairs);
+      };
+      const del = document.createElement('button');
+      del.className = 'ghost small'; del.textContent = 'Excluir';
+      del.onclick = () => {
+        if (!confirm(`Excluir "${e.title}"? Os links já enviados continuam funcionando.`)) return;
+        saveAll(loadAll().filter(x => x.id !== e.id));
+        if (currentId === e.id) currentId = null;
+        renderSaved();
+      };
+      actions.append(open, del);
+      li.append(span, actions);
+      ul.appendChild(li);
+    });
+  }
+
+  function doDraw() {
+    const pairs = draw(names);
+    saveCurrent(pairs);
+    showResults(pairs);
+  }
+
+  function showResults(pairs) {
+    $('resTitle').textContent = 'Links individuais — ' + ($('titleInput').value.trim() || 'Sorteio sem nome');
+    $('fileWarn').classList.toggle('hidden', location.protocol !== 'file:');
+    const ul = $('links');
+    ul.innerHTML = '';
+    pairs.forEach(p => {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = p.giver;
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const copy = document.createElement('button');
+      copy.className = 'small';
+      copy.textContent = 'Copiar link';
+      copy.onclick = async () => {
+        const url = linkFor(p);
+        try { await navigator.clipboard.writeText(url); copy.textContent = 'Copiado!'; }
+        catch { prompt('Copie o link:', url); }
+        setTimeout(() => copy.textContent = 'Copiar link', 1500);
+      };
+
+      const wa = document.createElement('a');
+      wa.href = 'https://wa.me/?text=' + encodeURIComponent(
+        `Amigo Secreto Estância Irmãos RM! ${p.giver}, descubra quem você tirou: ${linkFor(p)}`);
+      wa.target = '_blank'; wa.rel = 'noopener';
+      const wb = document.createElement('button');
+      wb.className = 'ghost small'; wb.textContent = 'WhatsApp';
+      wa.appendChild(wb);
+
+      actions.append(copy, wa);
+      li.append(span, actions);
+      ul.appendChild(li);
+    });
+    $('results').classList.remove('hidden');
+    $('results').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  $('btnDraw').onclick = doDraw;
+  $('btnRedo').onclick = doDraw;
+  $('btnNew').onclick = () => {
+    currentId = null;
+    names = [];
+    $('titleInput').value = '';
+    $('results').classList.add('hidden');
+    render();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // --- Modo revelação: se a URL tiver #código
+  const hash = location.hash.slice(1);
+  if (hash) {
+    try {
+      const [giver, receiver] = dec(hash).split('\n');
+      if (!giver || !receiver) throw 0;
+      $('viewSetup').classList.add('hidden');
+      $('viewReveal').classList.remove('hidden');
+      $('giverName').textContent = giver;
+      $('btnShow').onclick = () => {
+        $('receiverBox').innerHTML = '';
+        const d = document.createElement('div');
+        d.className = 'name';
+        d.textContent = '🎉 ' + receiver;
+        $('receiverBox').appendChild(d);
+      };
+    } catch { /* link inválido: mostra a tela normal */ }
+  }
+
+  render();
+  renderSaved();
+})();
+</script>
+</body>
+</html>
