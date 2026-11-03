@@ -16,7 +16,7 @@
   .sub { text-align:center; color:var(--muted); margin:0 0 24px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:18px; margin-bottom:16px; }
   .row { display:flex; gap:8px; }
-  input[type=text] { flex:1; min-width:0; padding:12px; font-size:1rem; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--text); }
+  input[type=text], input[type=tel] { flex:1; min-width:0; padding:12px; font-size:1rem; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--text); }
   button { font-size:1rem; padding:12px 16px; border:0; border-radius:10px; background:var(--accent); color:#fff; cursor:pointer; }
   button:hover { background:var(--accent-d); }
   button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
@@ -56,7 +56,7 @@
     <p>Cadastro para <strong id="regTitle">o amigo secreto</strong></p>
     <form id="regForm">
       <input type="text" id="regName" placeholder="Seu nome" autocomplete="name" maxlength="40" required style="width:100%;margin-bottom:8px">
-      <input type="tel" id="regPhone" placeholder="Seu WhatsApp com DDD" autocomplete="tel" maxlength="20" required style="width:100%">
+      <input type="tel" id="regPhone" placeholder="WhatsApp: (11)91234-5678" autocomplete="tel-national" inputmode="numeric" maxlength="14" required style="width:100%">
       <button type="submit" id="regBtn" class="full">Participar</button>
     </form>
     <p id="regMsg" class="msg"></p>
@@ -74,7 +74,7 @@
       <form id="addForm">
         <div class="row">
           <input type="text" id="nameInput" placeholder="Nome do participante" autocomplete="off" maxlength="40">
-          <input type="tel" id="phoneInput" placeholder="WhatsApp com DDD" autocomplete="off" maxlength="20">
+          <input type="tel" id="phoneInput" placeholder="WhatsApp: (11)91234-5678" autocomplete="off" inputmode="numeric" maxlength="14">
         </div>
         <button type="submit" class="full">Adicionar</button>
       </form>
@@ -94,8 +94,8 @@
           <div class="actions" style="margin-top:8px;justify-content:flex-start">
             <button type="button" id="btnCopyReg" class="small">Copiar link</button>
             <a id="regWa" target="_blank" rel="noopener"><button type="button" class="ghost small">Compartilhar no WhatsApp</button></a>
-            <button type="button" id="btnFetch" class="small">Buscar inscritos</button>
           </div>
+          <p id="regCount" class="hint"></p>
         </div>
       </div>
       <p id="msg" class="msg"></p>
@@ -151,13 +151,28 @@
     return a.map((g, i) => ({ giver: g.name, phone: g.phone, receiver: a[(i + 1) % a.length].name }));
   }
 
-  // Normaliza telefone para o formato do wa.me (apenas dígitos, com DDI 55 se faltar).
+  // Celular brasileiro: DDD (11-99) + 9 + 8 dígitos. Retorna '55' + 11 dígitos, ou '' se inválido.
   function normPhone(v) {
     let d = String(v ?? '').replace(/\D/g, '').replace(/^0+/, '');
-    if (d.length === 10 || d.length === 11) d = '55' + d;
-    return d.length >= 12 ? d : '';
+    if (d.length === 13 && d.startsWith('55')) d = d.slice(2);
+    return /^[1-9][1-9]9\d{8}$/.test(d) ? '55' + d : '';
   }
-  const fmtPhone = p => p ? `+${p.slice(0, 2)} ${p.slice(2, 4)} ${p.slice(4)}` : 'sem WhatsApp';
+  const fmtPhone = p => p ? `+55 (${p.slice(2, 4)})${p.slice(4, 9)}-${p.slice(9)}` : 'sem WhatsApp';
+
+  // Máscara (xx)xxxxx-xxxx enquanto digita
+  function maskPhone(v) {
+    let d = v.replace(/\D/g, '');
+    if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+    d = d.slice(0, 11);
+    if (!d) return '';
+    if (d.length <= 2) return `(${d}`;
+    const l = d.slice(2);
+    return `(${d.slice(0, 2)})${l.length > 5 ? l.slice(0, 5) + '-' + l.slice(5) : l}`;
+  }
+  ['phoneInput', 'regPhone'].forEach(id => {
+    const el = $(id);
+    el.addEventListener('input', () => { el.value = maskPhone(el.value); });
+  });
 
   // --- Codificação do par no link (UTF-8 -> base64 url-safe)
   const enc = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -206,7 +221,7 @@
     const raw = $('phoneInput').value.trim();
     const phone = normPhone(raw);
     if (raw && !phone) {
-      $('msg').textContent = 'WhatsApp inválido. Use DDD + número, ex.: (11) 91234-5678.';
+      $('msg').textContent = 'WhatsApp inválido. Use DDD + celular com 9 dígitos, ex.: (11)91234-5678.';
       return;
     }
     names.push({ name: n, phone });
@@ -388,6 +403,7 @@
       $('regWa').href = 'https://wa.me/?text=' + encodeURIComponent(
         `Amigo Secreto Estância Irmãos RM! Faça seu cadastro (nome e WhatsApp): ${link}`);
     }
+    listenRegs();
   }
 
   $('btnRegLink').onclick = async () => {
@@ -412,24 +428,33 @@
     setTimeout(() => b.textContent = 'Copiar link', 1500);
   };
 
-  $('btnFetch').onclick = async () => {
+  // Escuta os inscritos em tempo real e adiciona à lista. Quem for removido da lista não volta.
+  let unsub = null;
+  const seen = new Set();
+  function listenRegs() {
+    if (unsub) { unsub(); unsub = null; }
+    seen.clear();
+    $('regCount').textContent = '';
     if (!db || !regId) return;
-    try {
-      const snap = await db.collection('eventos').doc(regId).collection('participantes').orderBy('createdAt').get();
-      let added = 0, dup = 0;
+    unsub = db.collection('eventos').doc(regId).collection('participantes').onSnapshot(snap => {
+      let added = 0;
       snap.forEach(d => {
+        if (seen.has(d.id)) return;
+        seen.add(d.id);
         const { name, phone } = d.data();
         const n = String(name || '').trim().replace(/\s+/g, ' ');
-        if (!n) return;
-        if (names.some(x => x.name.toLowerCase() === n.toLowerCase())) { dup++; return; }
+        if (!n || names.some(x => x.name.toLowerCase() === n.toLowerCase())) return;
         names.push({ name: n, phone: normPhone(phone) });
         added++;
       });
-      $('results').classList.add('hidden');
-      render();
-      $('msg').textContent = `${added} novo(s) inscrito(s) adicionado(s)` + (dup ? `, ${dup} já estava(m) na lista.` : '.');
-    } catch { $('msg').textContent = 'Não consegui buscar os inscritos. Tente novamente.'; }
-  };
+      $('regCount').textContent = `Inscritos pelo link: ${snap.size}`;
+      if (added) {
+        $('results').classList.add('hidden');
+        render();
+        $('msg').textContent = `${added} novo(s) inscrito(s) adicionado(s) à lista.`;
+      }
+    }, () => { $('msg').textContent = 'Não consegui ler os inscritos. Verifique as regras do Firestore.'; });
+  }
 
   // --- Cadastro online (participante)
   async function initRegister(id) {
@@ -454,11 +479,11 @@
       const name = $('regName').value.trim().replace(/\s+/g, ' ');
       const phone = normPhone($('regPhone').value);
       if (!name) return;
-      if (!phone) { $('regMsg').textContent = 'WhatsApp inválido. Use DDD + número, ex.: (11) 91234-5678.'; return; }
+      if (!phone) { $('regMsg').textContent = 'WhatsApp inválido. Use DDD + celular com 9 dígitos, ex.: (11)91234-5678.'; return; }
       $('regBtn').disabled = true;
       try {
         await db.collection('eventos').doc(id).collection('participantes').add({
-          name, phone, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          name, phone: '+' + phone, createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         $('regForm').classList.add('hidden');
         $('regMsg').textContent = `Cadastro feito, ${name}! Aguarde o sorteio: você receberá seu link pelo WhatsApp.`;
