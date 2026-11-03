@@ -28,6 +28,9 @@
   .msg { color:var(--accent); min-height:1.2em; margin:8px 0 0; font-size:.95rem; }
   .full { width:100%; margin-top:14px; }
   .hidden { display:none; }
+  .import { margin-top:16px; padding-top:12px; border-top:1px solid var(--border); }
+  .import input[type=file] { flex:1; min-width:0; font-size:.9rem; color:var(--text); }
+  .sub-phone { display:block; color:var(--muted); font-size:.85rem; }
   .reveal { text-align:center; }
   .reveal .name { font-size:2rem; font-weight:700; color:var(--accent); margin:12px 0; word-break:break-word; }
   .hint { color:var(--muted); font-size:.9rem; }
@@ -57,10 +60,20 @@
 
     <section class="card">
       <input type="text" id="titleInput" placeholder="Nome do sorteio (ex.: Natal 2026)" autocomplete="off" maxlength="60" style="width:100%;margin-bottom:12px">
-      <form id="addForm" class="row">
-        <input type="text" id="nameInput" placeholder="Nome do participante" autocomplete="off" maxlength="40">
-        <button type="submit">Adicionar</button>
+      <form id="addForm">
+        <div class="row">
+          <input type="text" id="nameInput" placeholder="Nome do participante" autocomplete="off" maxlength="40">
+          <input type="tel" id="phoneInput" placeholder="WhatsApp com DDD" autocomplete="off" maxlength="20">
+        </div>
+        <button type="submit" class="full">Adicionar</button>
       </form>
+      <div class="import">
+        <p class="hint">Ou importe uma planilha (.xlsx, .xls ou .csv) com as colunas <strong>Nome</strong> e <strong>WhatsApp</strong>:</p>
+        <div class="row">
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+          <button type="button" id="btnTemplate" class="ghost small">Baixar modelo</button>
+        </div>
+      </div>
       <p id="msg" class="msg"></p>
       <ul id="list"></ul>
       <button id="btnDraw" class="full" disabled>Sortear</button>
@@ -77,6 +90,7 @@
   </div>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -90,8 +104,16 @@
       const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
       [a[i], a[j]] = [a[j], a[i]];
     }
-    return a.map((giver, i) => ({ giver, receiver: a[(i + 1) % a.length] }));
+    return a.map((g, i) => ({ giver: g.name, phone: g.phone, receiver: a[(i + 1) % a.length].name }));
   }
+
+  // Normaliza telefone para o formato do wa.me (apenas dígitos, com DDI 55 se faltar).
+  function normPhone(v) {
+    let d = String(v ?? '').replace(/\D/g, '').replace(/^0+/, '');
+    if (d.length === 10 || d.length === 11) d = '55' + d;
+    return d.length >= 12 ? d : '';
+  }
+  const fmtPhone = p => p ? `+${p.slice(0, 2)} ${p.slice(2, 4)} ${p.slice(4)}` : 'sem WhatsApp';
 
   // --- Codificação do par no link (UTF-8 -> base64 url-safe)
   const enc = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -113,7 +135,11 @@
     names.forEach((n, i) => {
       const li = document.createElement('li');
       const span = document.createElement('span');
-      span.textContent = n;
+      span.textContent = n.name;
+      const ph = document.createElement('small');
+      ph.className = 'sub-phone';
+      ph.textContent = fmtPhone(n.phone);
+      span.appendChild(ph);
       const b = document.createElement('button');
       b.className = 'ghost small';
       b.textContent = 'Remover';
@@ -129,15 +155,65 @@
     e.preventDefault();
     const n = $('nameInput').value.trim().replace(/\s+/g, ' ');
     if (!n) return;
-    if (names.some(x => x.toLowerCase() === n.toLowerCase())) {
+    if (names.some(x => x.name.toLowerCase() === n.toLowerCase())) {
       $('msg').textContent = 'Esse nome já foi adicionado.';
       return;
     }
-    names.push(n);
+    const raw = $('phoneInput').value.trim();
+    const phone = normPhone(raw);
+    if (raw && !phone) {
+      $('msg').textContent = 'WhatsApp inválido. Use DDD + número, ex.: (11) 91234-5678.';
+      return;
+    }
+    names.push({ name: n, phone });
     $('nameInput').value = '';
+    $('phoneInput').value = '';
     $('results').classList.add('hidden');
     render();
     $('nameInput').focus();
+  };
+
+  // --- Importação de planilha (colunas Nome e WhatsApp)
+  $('fileInput').onchange = async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (typeof XLSX === 'undefined') { $('msg').textContent = 'Não foi possível carregar o leitor de planilhas (sem internet?).'; return; }
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+      let ni = 0, pi = 1, start = 0;
+      if (rows.length) {
+        const head = rows[0].map(c => String(c).trim().toLowerCase());
+        const hn = head.findIndex(c => c.includes('nome'));
+        const hp = head.findIndex(c => /whats|telefone|celular|fone/.test(c));
+        if (hn >= 0 || hp >= 0) { start = 1; if (hn >= 0) ni = hn; if (hp >= 0) pi = hp; }
+      }
+      let added = 0, dup = 0, bad = 0;
+      for (const r of rows.slice(start)) {
+        const name = String(r[ni] ?? '').trim().replace(/\s+/g, ' ');
+        if (!name) continue;
+        if (names.some(x => x.name.toLowerCase() === name.toLowerCase())) { dup++; continue; }
+        const phone = normPhone(r[pi]);
+        if (String(r[pi] ?? '').trim() && !phone) bad++;
+        names.push({ name, phone });
+        added++;
+      }
+      $('results').classList.add('hidden');
+      render();
+      const extra = [dup && `${dup} repetido(s) ignorado(s)`, bad && `${bad} WhatsApp inválido(s) (ficam sem número)`].filter(Boolean);
+      $('msg').textContent = `${added} participante(s) importado(s)` + (extra.length ? ' — ' + extra.join(', ') : '.');
+    } catch {
+      $('msg').textContent = 'Não consegui ler a planilha. Verifique se ela tem as colunas Nome e WhatsApp.';
+    }
+  };
+
+  $('btnTemplate').onclick = () => {
+    if (typeof XLSX === 'undefined') return;
+    const ws = XLSX.utils.aoa_to_sheet([['Nome', 'WhatsApp'], ['Maria Silva', '11912345678'], ['João Souza', '21987654321']]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Participantes');
+    XLSX.writeFile(wb, 'modelo-amigo-secreto.xlsx');
   };
 
   // --- Sorteios salvos (localStorage deste navegador)
@@ -176,7 +252,7 @@
       open.className = 'small'; open.textContent = 'Abrir';
       open.onclick = () => {
         currentId = e.id;
-        names = e.pairs.map(p => p.giver);
+        names = e.pairs.map(p => ({ name: p.giver, phone: p.phone || '' }));
         $('titleInput').value = e.title;
         render();
         showResults(e.pairs);
@@ -224,11 +300,11 @@
       };
 
       const wa = document.createElement('a');
-      wa.href = 'https://wa.me/?text=' + encodeURIComponent(
+      wa.href = `https://wa.me/${p.phone || ''}?text=` + encodeURIComponent(
         `Amigo Secreto Estância Irmãos RM! ${p.giver}, descubra quem você tirou: ${linkFor(p)}`);
       wa.target = '_blank'; wa.rel = 'noopener';
       const wb = document.createElement('button');
-      wb.className = 'ghost small'; wb.textContent = 'WhatsApp';
+      wb.className = 'ghost small'; wb.textContent = p.phone ? 'Enviar no WhatsApp' : 'WhatsApp (escolher contato)';
       wa.appendChild(wb);
 
       actions.append(copy, wa);
