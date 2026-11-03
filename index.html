@@ -124,7 +124,14 @@
 
   // --- Firebase (cadastro online). Cole aqui a configuração do seu projeto:
   // const FIREBASE_CONFIG = { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." };
-  const FIREBASE_CONFIG = null;
+  const FIREBASE_CONFIG =  {
+  apiKey: "AIzaSyDfx8nXTrTPOCBsI2a5tnS8pvJ_r4CHjkw",
+  authDomain: "amigo-secreto-erm.firebaseapp.com",
+  projectId: "amigo-secreto-erm",
+  storageBucket: "amigo-secreto-erm.firebasestorage.app",
+  messagingSenderId: "267531395924",
+  appId: "1:267531395924:web:ec5224ab8845c050f1dec1"
+};
   let db = null;
   try {
     if (FIREBASE_CONFIG && typeof firebase !== 'undefined') {
