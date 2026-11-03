@@ -51,6 +51,17 @@
     <p class="hint">Não mostre para ninguém 🤫</p>
   </section>
 
+  <!-- Tela de auto-cadastro (link #cadastro=ID) -->
+  <section id="viewRegister" class="card hidden">
+    <p>Cadastro para <strong id="regTitle">o amigo secreto</strong></p>
+    <form id="regForm">
+      <input type="text" id="regName" placeholder="Seu nome" autocomplete="name" maxlength="40" required style="width:100%;margin-bottom:8px">
+      <input type="tel" id="regPhone" placeholder="Seu WhatsApp com DDD" autocomplete="tel" maxlength="20" required style="width:100%">
+      <button type="submit" id="regBtn" class="full">Participar</button>
+    </form>
+    <p id="regMsg" class="msg"></p>
+  </section>
+
   <!-- Tela de cadastro / sorteio -->
   <div id="viewSetup">
     <section id="savedCard" class="card hidden">
@@ -74,6 +85,19 @@
           <button type="button" id="btnTemplate" class="ghost small">Baixar modelo</button>
         </div>
       </div>
+      <div class="import">
+        <strong>Cadastro online</strong>
+        <p class="hint">Gere um link para cada pessoa se cadastrar sozinha (nome e WhatsApp). Depois, busque os inscritos aqui.</p>
+        <button type="button" id="btnRegLink" class="ghost full">Gerar link de cadastro</button>
+        <div id="regBox" class="hidden">
+          <input type="text" id="regLinkOut" readonly style="width:100%;margin-top:10px">
+          <div class="actions" style="margin-top:8px;justify-content:flex-start">
+            <button type="button" id="btnCopyReg" class="small">Copiar link</button>
+            <a id="regWa" target="_blank" rel="noopener"><button type="button" class="ghost small">Compartilhar no WhatsApp</button></a>
+            <button type="button" id="btnFetch" class="small">Buscar inscritos</button>
+          </div>
+        </div>
+      </div>
       <p id="msg" class="msg"></p>
       <ul id="list"></ul>
       <button id="btnDraw" class="full" disabled>Sortear</button>
@@ -91,10 +115,23 @@
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
   let names = [];
+
+  // --- Firebase (cadastro online). Cole aqui a configuração do seu projeto:
+  // const FIREBASE_CONFIG = { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." };
+  const FIREBASE_CONFIG = null;
+  let db = null;
+  try {
+    if (FIREBASE_CONFIG && typeof firebase !== 'undefined') {
+      firebase.initializeApp(FIREBASE_CONFIG);
+      db = firebase.firestore();
+    }
+  } catch { db = null; }
 
   // --- Sorteio: embaralha e cada um tira o próximo da fila circular.
   // Garante que ninguém tira a si mesmo (mínimo 2 pessoas).
@@ -233,6 +270,7 @@
     }
     entry.title = title;
     entry.pairs = pairs;
+    entry.regId = regId;
     saveAll(all);
     renderSaved();
   }
@@ -252,6 +290,7 @@
       open.className = 'small'; open.textContent = 'Abrir';
       open.onclick = () => {
         currentId = e.id;
+        setRegId(e.regId || null);
         names = e.pairs.map(p => ({ name: p.giver, phone: p.phone || '' }));
         $('titleInput').value = e.title;
         render();
@@ -319,6 +358,7 @@
   $('btnRedo').onclick = doDraw;
   $('btnNew').onclick = () => {
     currentId = null;
+    setRegId(null);
     names = [];
     $('titleInput').value = '';
     $('results').classList.add('hidden');
@@ -326,9 +366,107 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // --- Cadastro online (organizador)
+  const DRAFT = 'amigoSecretoRegId';
+  let regId = null;
+  const regLink = id => `${location.href.split('#')[0].split('?')[0]}#cadastro=${id}`;
+
+  function setRegId(id) {
+    regId = id;
+    try { id ? localStorage.setItem(DRAFT, id) : localStorage.removeItem(DRAFT); } catch {}
+    $('regBox').classList.toggle('hidden', !id);
+    if (id) {
+      const link = regLink(id);
+      $('regLinkOut').value = link;
+      $('regWa').href = 'https://wa.me/?text=' + encodeURIComponent(
+        `Amigo Secreto Estância Irmãos RM! Faça seu cadastro (nome e WhatsApp): ${link}`);
+    }
+  }
+
+  $('btnRegLink').onclick = async () => {
+    if (!db) { $('msg').textContent = 'Cadastro online ainda não configurado (falta a configuração do Firebase no site).'; return; }
+    if (!regId) {
+      const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => (b % 36).toString(36)).join('');
+      try {
+        await db.collection('eventos').doc(id).set({
+          title: $('titleInput').value.trim() || 'Amigo Secreto',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch { $('msg').textContent = 'Não consegui criar o link de cadastro. Verifique a configuração do Firebase e as regras.'; return; }
+      setRegId(id);
+    }
+    $('regBox').classList.remove('hidden');
+  };
+
+  $('btnCopyReg').onclick = async () => {
+    const b = $('btnCopyReg');
+    try { await navigator.clipboard.writeText($('regLinkOut').value); b.textContent = 'Copiado!'; }
+    catch { prompt('Copie o link:', $('regLinkOut').value); }
+    setTimeout(() => b.textContent = 'Copiar link', 1500);
+  };
+
+  $('btnFetch').onclick = async () => {
+    if (!db || !regId) return;
+    try {
+      const snap = await db.collection('eventos').doc(regId).collection('participantes').orderBy('createdAt').get();
+      let added = 0, dup = 0;
+      snap.forEach(d => {
+        const { name, phone } = d.data();
+        const n = String(name || '').trim().replace(/\s+/g, ' ');
+        if (!n) return;
+        if (names.some(x => x.name.toLowerCase() === n.toLowerCase())) { dup++; return; }
+        names.push({ name: n, phone: normPhone(phone) });
+        added++;
+      });
+      $('results').classList.add('hidden');
+      render();
+      $('msg').textContent = `${added} novo(s) inscrito(s) adicionado(s)` + (dup ? `, ${dup} já estava(m) na lista.` : '.');
+    } catch { $('msg').textContent = 'Não consegui buscar os inscritos. Tente novamente.'; }
+  };
+
+  // --- Cadastro online (participante)
+  async function initRegister(id) {
+    $('viewSetup').classList.add('hidden');
+    $('viewRegister').classList.remove('hidden');
+    if (!db) {
+      $('regForm').classList.add('hidden');
+      $('regMsg').textContent = 'Cadastro indisponível no momento.';
+      return;
+    }
+    try {
+      const ev = await db.collection('eventos').doc(id).get();
+      if (!ev.exists) throw 0;
+      $('regTitle').textContent = ev.data().title;
+    } catch {
+      $('regForm').classList.add('hidden');
+      $('regMsg').textContent = 'Link de cadastro inválido.';
+      return;
+    }
+    $('regForm').onsubmit = async e => {
+      e.preventDefault();
+      const name = $('regName').value.trim().replace(/\s+/g, ' ');
+      const phone = normPhone($('regPhone').value);
+      if (!name) return;
+      if (!phone) { $('regMsg').textContent = 'WhatsApp inválido. Use DDD + número, ex.: (11) 91234-5678.'; return; }
+      $('regBtn').disabled = true;
+      try {
+        await db.collection('eventos').doc(id).collection('participantes').add({
+          name, phone, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        $('regForm').classList.add('hidden');
+        $('regMsg').textContent = `Cadastro feito, ${name}! Aguarde o sorteio: você receberá seu link pelo WhatsApp.`;
+      } catch {
+        $('regBtn').disabled = false;
+        $('regMsg').textContent = 'Não foi possível cadastrar. Tente novamente.';
+      }
+    };
+  }
+
   // --- Modo revelação: se a URL tiver #código
   const hash = location.hash.slice(1);
-  if (hash) {
+  if (hash.startsWith('cadastro=')) {
+    initRegister(hash.slice('cadastro='.length));
+  } else if (hash) {
     try {
       const [giver, receiver] = dec(hash).split('\n');
       if (!giver || !receiver) throw 0;
@@ -347,6 +485,7 @@
 
   render();
   renderSaved();
+  try { const saved = localStorage.getItem(DRAFT); if (saved) setRegId(saved); } catch {}
 })();
 </script>
 </body>
